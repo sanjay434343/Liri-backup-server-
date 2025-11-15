@@ -5,7 +5,7 @@ export default async function handler(req, res) {
   // --- CORS SUPPORT (REQUIRED) ---
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   
   if (req.method === "OPTIONS") {
     return res.status(200).end();
@@ -17,20 +17,23 @@ export default async function handler(req, res) {
     const APP_KEY = "K005yQ1MrQJffnqhZf2XmPAubbv0ltM";
     const BUCKET_ID = "262e6adb3733838f90a20415";
 
+    console.log("🔐 Authorizing with Backblaze B2...");
+
     // --- STEP 1: AUTHORIZE ---
     const auth = await axios.get(
       "https://api.backblazeb2.com/b2api/v2/b2_authorize_account",
       {
         headers: {
-          Authorization:
-            "Basic " + Buffer.from(`${KEY_ID}:${APP_KEY}`).toString("base64"),
+          Authorization: "Basic " + Buffer.from(`${KEY_ID}:${APP_KEY}`).toString("base64"),
         },
       }
     );
     
     const authData = auth.data;
+    console.log("✅ Authorization successful");
 
     // --- STEP 2: GET UPLOAD URL ---
+    console.log("🔗 Getting upload URL...");
     const upload = await axios.post(
       `${authData.apiUrl}/b2api/v2/b2_get_upload_url`,
       { bucketId: BUCKET_ID },
@@ -40,6 +43,8 @@ export default async function handler(req, res) {
         },
       }
     );
+
+    console.log("✅ Upload URL obtained");
 
     return res.status(200).json({
       uploadUrl: upload.data.uploadUrl,
