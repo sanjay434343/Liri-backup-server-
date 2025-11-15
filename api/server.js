@@ -17,21 +17,7 @@ export default async function handler(req, res) {
     const APP_KEY = "K005yQ1MrQJffnqhZf2XmPAubbv0ltM";
     const BUCKET_ID = "262e6adb3733838f90a20415";
 
-    console.log("🔐 Starting B2 upload process...");
-
-    // Get file data from request
-    const { fileName, fileData, sha1 } = req.body;
-    
-    if (!fileName || !fileData || !sha1) {
-      return res.status(400).json({
-        error: "Missing required fields: fileName, fileData, sha1"
-      });
-    }
-
-    console.log(`📁 File: ${fileName}, SHA1: ${sha1}`);
-
-    // --- STEP 1: AUTHORIZE ---
-    console.log("🔐 Authorizing with Backblaze B2...");
+    // --- AUTHORIZE FIRST (needed for all operations) ---
     const auth = await axios.get(
       "https://api.backblazeb2.com/b2api/v2/b2_authorize_account",
       {
@@ -42,58 +28,108 @@ export default async function handler(req, res) {
     );
     
     const authData = auth.data;
-    console.log("✅ Authorization successful");
 
-    // --- STEP 2: GET UPLOAD URL ---
-    console.log("🔗 Getting upload URL...");
-    const upload = await axios.post(
-      `${authData.apiUrl}/b2api/v2/b2_get_upload_url`,
-      { bucketId: BUCKET_ID },
-      {
-        headers: {
-          Authorization: authData.authorizationToken,
+    // ===== ROUTE: LIST FILES =====
+    if (req.method === "GET") {
+      console.log("📋 Listing files in user/ folder...");
+
+      const listResponse = await axios.post(
+        `${authData.apiUrl}/b2api/v2/b2_list_file_names`,
+        {
+          bucketId: BUCKET_ID,
+          prefix: "user/",
+          maxFileCount: 1000
         },
+        {
+          headers: {
+            Authorization: authData.authorizationToken,
+          },
+        }
+      );
+
+      const files = listResponse.data.files.map(file => ({
+        fileName: file.fileName,
+        fileId: file.fileId,
+        size: file.contentLength,
+        uploadTimestamp: file.uploadTimestamp,
+        sha1: file.contentSha1,
+        downloadUrl: `${authData.downloadUrl}/file/${listResponse.data.bucketName || 'liri'}/${file.fileName}`
+      }));
+
+      console.log(`✅ Found ${files.length} files`);
+
+      return res.status(200).json({
+        success: true,
+        files: files,
+        count: files.length
+      });
+    }
+
+    // ===== ROUTE: UPLOAD FILE =====
+    if (req.method === "POST") {
+      console.log("🔐 Starting B2 upload process...");
+
+      const { fileName, fileData, sha1 } = req.body;
+      
+      if (!fileName || !fileData || !sha1) {
+        return res.status(400).json({
+          error: "Missing required fields: fileName, fileData, sha1"
+        });
       }
-    );
 
-    console.log("✅ Upload URL obtained");
+      console.log(`📁 File: ${fileName}, SHA1: ${sha1}`);
 
-    // --- STEP 3: UPLOAD FILE TO B2 ---
-    // Add "user/" prefix to store in user folder
-    const b2FileName = `user/${fileName}`;
-    console.log(`📤 Uploading to B2 as: ${b2FileName}`);
+      // --- GET UPLOAD URL ---
+      console.log("🔗 Getting upload URL...");
+      const upload = await axios.post(
+        `${authData.apiUrl}/b2api/v2/b2_get_upload_url`,
+        { bucketId: BUCKET_ID },
+        {
+          headers: {
+            Authorization: authData.authorizationToken,
+          },
+        }
+      );
 
-    // Convert base64 to buffer
-    const fileBuffer = Buffer.from(fileData, 'base64');
+      console.log("✅ Upload URL obtained");
 
-    const uploadResponse = await axios.post(
-      upload.data.uploadUrl,
-      fileBuffer,
-      {
-        headers: {
-          Authorization: upload.data.authorizationToken,
-          "X-Bz-File-Name": encodeURIComponent(b2FileName),
-          "Content-Type": "b2/x-auto",
-          "Content-Length": fileBuffer.length,
-          "X-Bz-Content-Sha1": sha1
-        },
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity
-      }
-    );
+      // --- UPLOAD FILE TO B2 ---
+      const b2FileName = `user/${fileName}`;
+      console.log(`📤 Uploading to B2 as: ${b2FileName}`);
 
-    console.log("✅ Upload successful!");
+      const fileBuffer = Buffer.from(fileData, 'base64');
 
-    return res.status(200).json({
-      success: true,
-      file: uploadResponse.data,
-      message: `File uploaded successfully to user/${fileName}`
-    });
+      const uploadResponse = await axios.post(
+        upload.data.uploadUrl,
+        fileBuffer,
+        {
+          headers: {
+            Authorization: upload.data.authorizationToken,
+            "X-Bz-File-Name": encodeURIComponent(b2FileName),
+            "Content-Type": "b2/x-auto",
+            "Content-Length": fileBuffer.length,
+            "X-Bz-Content-Sha1": sha1
+          },
+          maxBodyLength: Infinity,
+          maxContentLength: Infinity
+        }
+      );
+
+      console.log("✅ Upload successful!");
+
+      return res.status(200).json({
+        success: true,
+        file: uploadResponse.data,
+        message: `File uploaded successfully to user/${fileName}`
+      });
+    }
+
+    return res.status(405).json({ error: "Method not allowed" });
 
   } catch (error) {
     console.error("💥 Server Error:", error.response?.data || error.message);
     return res.status(500).json({
-      error: "Upload failed",
+      error: "Request failed",
       details: error.response?.data || error.message,
     });
   }
