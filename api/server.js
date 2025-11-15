@@ -12,14 +12,26 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Hardcoded credentials (no env variables)
+    // Hardcoded credentials
     const KEY_ID = "0056eab733f02450000000004";
     const APP_KEY = "K005yQ1MrQJffnqhZf2XmPAubbv0ltM";
     const BUCKET_ID = "262e6adb3733838f90a20415";
 
-    console.log("🔐 Authorizing with Backblaze B2...");
+    console.log("🔐 Starting B2 upload process...");
+
+    // Get file data from request
+    const { fileName, fileData, sha1 } = req.body;
+    
+    if (!fileName || !fileData || !sha1) {
+      return res.status(400).json({
+        error: "Missing required fields: fileName, fileData, sha1"
+      });
+    }
+
+    console.log(`📁 File: ${fileName}, SHA1: ${sha1}`);
 
     // --- STEP 1: AUTHORIZE ---
+    console.log("🔐 Authorizing with Backblaze B2...");
     const auth = await axios.get(
       "https://api.backblazeb2.com/b2api/v2/b2_authorize_account",
       {
@@ -46,14 +58,42 @@ export default async function handler(req, res) {
 
     console.log("✅ Upload URL obtained");
 
+    // --- STEP 3: UPLOAD FILE TO B2 ---
+    // Add "user/" prefix to store in user folder
+    const b2FileName = `user/${fileName}`;
+    console.log(`📤 Uploading to B2 as: ${b2FileName}`);
+
+    // Convert base64 to buffer
+    const fileBuffer = Buffer.from(fileData, 'base64');
+
+    const uploadResponse = await axios.post(
+      upload.data.uploadUrl,
+      fileBuffer,
+      {
+        headers: {
+          Authorization: upload.data.authorizationToken,
+          "X-Bz-File-Name": encodeURIComponent(b2FileName),
+          "Content-Type": "b2/x-auto",
+          "Content-Length": fileBuffer.length,
+          "X-Bz-Content-Sha1": sha1
+        },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity
+      }
+    );
+
+    console.log("✅ Upload successful!");
+
     return res.status(200).json({
-      uploadUrl: upload.data.uploadUrl,
-      uploadAuth: upload.data.authorizationToken,
+      success: true,
+      file: uploadResponse.data,
+      message: `File uploaded successfully to user/${fileName}`
     });
+
   } catch (error) {
     console.error("💥 Server Error:", error.response?.data || error.message);
     return res.status(500).json({
-      error: "Backblaze request failed",
+      error: "Upload failed",
       details: error.response?.data || error.message,
     });
   }
