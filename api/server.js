@@ -4,7 +4,7 @@ import axios from "axios";
 export default async function handler(req, res) {
   // --- CORS SUPPORT (REQUIRED) ---
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   
   if (req.method === "OPTIONS") {
@@ -33,6 +33,24 @@ export default async function handler(req, res) {
     if (req.method === "GET") {
       console.log("📋 Listing files in user/ folder...");
 
+      // First, get bucket info to retrieve bucket name
+      const bucketInfoResponse = await axios.post(
+        `${authData.apiUrl}/b2api/v2/b2_list_buckets`,
+        {
+          accountId: authData.accountId,
+          bucketId: BUCKET_ID
+        },
+        {
+          headers: {
+            Authorization: authData.authorizationToken,
+          },
+        }
+      );
+
+      const bucketName = bucketInfoResponse.data.buckets[0]?.bucketName;
+      console.log(`📦 Bucket name: ${bucketName}`);
+
+      // Now list files
       const listResponse = await axios.post(
         `${authData.apiUrl}/b2api/v2/b2_list_file_names`,
         {
@@ -53,7 +71,8 @@ export default async function handler(req, res) {
         size: file.contentLength,
         uploadTimestamp: file.uploadTimestamp,
         sha1: file.contentSha1,
-        downloadUrl: `${authData.downloadUrl}/file/${listResponse.data.bucketName || 'liri'}/${file.fileName}`
+        downloadUrl: `${authData.downloadUrl}/file/${bucketName}/${file.fileName}`,
+        downloadAuthToken: authData.authorizationToken
       }));
 
       console.log(`✅ Found ${files.length} files`);
@@ -61,7 +80,8 @@ export default async function handler(req, res) {
       return res.status(200).json({
         success: true,
         files: files,
-        count: files.length
+        count: files.length,
+        bucketName: bucketName
       });
     }
 
@@ -121,6 +141,34 @@ export default async function handler(req, res) {
         success: true,
         file: uploadResponse.data,
         message: `File uploaded successfully to user/${fileName}`
+      });
+    }
+
+    // ===== ROUTE: DOWNLOAD FILE =====
+    if (req.method === "DELETE" && req.body.action === "download") {
+      const { fileId, fileName } = req.body;
+      
+      console.log(`📥 Downloading file: ${fileName}`);
+
+      // Get download authorization
+      const downloadAuthResponse = await axios.post(
+        `${authData.apiUrl}/b2api/v2/b2_get_download_authorization`,
+        {
+          bucketId: BUCKET_ID,
+          fileNamePrefix: "user/",
+          validDurationInSeconds: 3600
+        },
+        {
+          headers: {
+            Authorization: authData.authorizationToken,
+          },
+        }
+      );
+
+      return res.status(200).json({
+        success: true,
+        downloadAuth: downloadAuthResponse.data.authorizationToken,
+        downloadUrl: `${authData.downloadUrl}/b2api/v2/b2_download_file_by_id?fileId=${fileId}`
       });
     }
 
