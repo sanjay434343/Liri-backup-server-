@@ -6,22 +6,16 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
+  
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
   try {
-    const KEY_ID = process.env.B2_KEY_ID;
-    const APP_KEY = process.env.B2_APP_KEY;
-    const BUCKET_ID = process.env.B2_BUCKET_ID;
-
-    // ⛔ If any env variable is missing, return error
-    if (!KEY_ID || !APP_KEY || !BUCKET_ID) {
-      return res.status(500).json({
-        error: "Missing environment variables"
-      });
-    }
+    // Hardcoded credentials (no env variables)
+    const KEY_ID = "0056eab733f02450000000004";
+    const APP_KEY = "K005yQ1MrQJffnqhZf2XmPAubbv0ltM";
+    const BUCKET_ID = "262e6adb3733838f90a20415";
 
     // --- STEP 1: AUTHORIZE ---
     const auth = await axios.get(
@@ -33,7 +27,7 @@ export default async function handler(req, res) {
         },
       }
     );
-
+    
     const authData = auth.data;
 
     // --- STEP 2: GET UPLOAD URL ---
