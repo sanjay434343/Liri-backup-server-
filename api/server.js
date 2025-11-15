@@ -15,7 +15,7 @@ export default async function handler(req, res) {
     // Hardcoded credentials
     const KEY_ID = "0056eab733f02450000000004";
     const APP_KEY = "K005yQ1MrQJffnqhZf2XmPAubbv0ltM";
-    const BUCKET_ID = "262e6adb3733838f90a20415";
+    const BUCKET_ID = "e6fe9aeb97f3838f90a20415";
 
     // --- AUTHORIZE FIRST (needed for all operations) ---
     const auth = await axios.get(
