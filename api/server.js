@@ -16,10 +16,19 @@ export default async function handler(req, res) {
   console.log('Query params:', req.query);
 
   try {
-    // Hardcoded credentials
-    const KEY_ID = "0056eab733f02450000000004";
-    const APP_KEY = "K005yQ1MrQJffnqhZf2XmPAubbv0ltM";
-    const BUCKET_ID = "e6fe9aeb97f3838f90a20415";
+    // Get credentials from environment variables
+    const KEY_ID = process.env.B2_KEY_ID;
+    const APP_KEY = process.env.B2_APP_KEY;
+    const BUCKET_ID = process.env.B2_BUCKET_ID;
+
+    // Validate environment variables
+    if (!KEY_ID || !APP_KEY || !BUCKET_ID) {
+      console.error('Missing environment variables!');
+      return res.status(500).json({
+        error: "Server configuration error",
+        details: "Missing required environment variables: B2_KEY_ID, B2_APP_KEY, B2_BUCKET_ID"
+      });
+    }
 
     // --- AUTHORIZE FIRST (needed for all operations) ---
     const auth = await axios.get(
