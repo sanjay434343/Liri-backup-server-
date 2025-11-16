@@ -4,7 +4,7 @@ import axios from "axios";
 export default async function handler(req, res) {
   // --- CORS SUPPORT (REQUIRED) ---
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS, PUT");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   
   if (req.method === "OPTIONS") {
@@ -16,19 +16,10 @@ export default async function handler(req, res) {
   console.log('Query params:', req.query);
 
   try {
-    // Get credentials from environment variables
-    const KEY_ID = process.env.B2_KEY_ID;
-    const APP_KEY = process.env.B2_APP_KEY;
-    const BUCKET_ID = process.env.B2_BUCKET_ID;
-
-    // Validate environment variables
-    if (!KEY_ID || !APP_KEY || !BUCKET_ID) {
-      console.error('Missing environment variables!');
-      return res.status(500).json({
-        error: "Server configuration error",
-        details: "Missing required environment variables: B2_KEY_ID, B2_APP_KEY, B2_BUCKET_ID"
-      });
-    }
+    // Hardcoded credentials
+    const KEY_ID = "0056eab733f02450000000004";
+    const APP_KEY = "K005yQ1MrQJffnqhZf2XmPAubbv0ltM";
+    const BUCKET_ID = "e6fe9aeb97f3838f90a20415";
 
     // --- AUTHORIZE FIRST (needed for all operations) ---
     const auth = await axios.get(
@@ -178,6 +169,97 @@ export default async function handler(req, res) {
           details: downloadError.response?.data || downloadError.message
         });
       }
+    }
+
+    // ===== ROUTE: DELETE FILE OR FOLDER =====
+    if (req.method === "DELETE") {
+      const { fileId, fileName, folder } = req.body;
+      
+      console.log("🗑️ Delete request received:", { fileId, fileName, folder });
+
+      // Delete entire folder
+      if (folder && !fileId && !fileName) {
+        console.log(`📁 Deleting entire folder: user/${folder}/`);
+        
+        const prefix = `user/${folder}/`;
+        
+        // List all files in folder
+        const listResponse = await axios.post(
+          `${authData.apiUrl}/b2api/v2/b2_list_file_names`,
+          {
+            bucketId: BUCKET_ID,
+            prefix: prefix,
+            maxFileCount: 10000
+          },
+          {
+            headers: {
+              Authorization: authData.authorizationToken,
+            },
+          }
+        );
+
+        const filesToDelete = listResponse.data.files;
+        console.log(`Found ${filesToDelete.length} files to delete`);
+
+        if (filesToDelete.length === 0) {
+          return res.status(404).json({
+            error: "Folder not found or already empty"
+          });
+        }
+
+        // Delete all files in folder
+        const deletePromises = filesToDelete.map(file =>
+          axios.post(
+            `${authData.apiUrl}/b2api/v2/b2_delete_file_version`,
+            {
+              fileId: file.fileId,
+              fileName: file.fileName
+            },
+            {
+              headers: {
+                Authorization: authData.authorizationToken,
+              },
+            }
+          )
+        );
+
+        await Promise.all(deletePromises);
+
+        console.log(`✅ Successfully deleted folder: ${folder}`);
+        return res.status(200).json({
+          success: true,
+          message: `Folder '${folder}' deleted successfully`,
+          filesDeleted: filesToDelete.length
+        });
+      }
+
+      // Delete single file
+      if (fileId && fileName) {
+        console.log(`🗑️ Deleting single file: ${fileName} (${fileId})`);
+
+        await axios.post(
+          `${authData.apiUrl}/b2api/v2/b2_delete_file_version`,
+          {
+            fileId: fileId,
+            fileName: fileName
+          },
+          {
+            headers: {
+              Authorization: authData.authorizationToken,
+            },
+          }
+        );
+
+        console.log(`✅ Successfully deleted file: ${fileName}`);
+        return res.status(200).json({
+          success: true,
+          message: `File '${fileName}' deleted successfully`
+        });
+      }
+
+      return res.status(400).json({
+        error: "Invalid delete request. Provide either 'folder' OR both 'fileId' and 'fileName'"
+      });
     }
 
     // ===== ROUTE: UPLOAD FILE =====
