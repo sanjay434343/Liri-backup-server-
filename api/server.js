@@ -4,7 +4,7 @@ import axios from "axios";
 export default async function handler(req, res) {
   // --- CORS SUPPORT (REQUIRED) ---
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   
   if (req.method === "OPTIONS") {
@@ -30,7 +30,7 @@ export default async function handler(req, res) {
     const authData = auth.data;
 
     // ===== ROUTE: LIST FILES =====
-    if (req.method === "GET") {
+    if (req.method === "GET" && !req.query.fileId) {
       console.log("📋 Listing files in user/ folder...");
 
       // First, get bucket info to retrieve bucket name
@@ -71,8 +71,7 @@ export default async function handler(req, res) {
         size: file.contentLength,
         uploadTimestamp: file.uploadTimestamp,
         sha1: file.contentSha1,
-        downloadUrl: `${authData.downloadUrl}/file/${bucketName}/${file.fileName}`,
-        downloadAuthToken: authData.authorizationToken
+        contentType: file.contentType || 'application/octet-stream'
       }));
 
       console.log(`✅ Found ${files.length} files`);
@@ -83,6 +82,36 @@ export default async function handler(req, res) {
         count: files.length,
         bucketName: bucketName
       });
+    }
+
+    // ===== ROUTE: DOWNLOAD FILE (PROXY) =====
+    if (req.method === "GET" && req.query.fileId) {
+      const fileId = req.query.fileId;
+      console.log(`📥 Proxying download for file: ${fileId}`);
+
+      // Download file from B2
+      const downloadUrl = `${authData.downloadUrl}/b2api/v2/b2_download_file_by_id?fileId=${fileId}`;
+      
+      const fileResponse = await axios.get(downloadUrl, {
+        headers: {
+          Authorization: authData.authorizationToken,
+        },
+        responseType: 'arraybuffer'
+      });
+
+      // Get content type from B2 response
+      const contentType = fileResponse.headers['content-type'] || 'application/octet-stream';
+      const contentDisposition = fileResponse.headers['content-disposition'] || '';
+      
+      // Set headers for browser
+      res.setHeader('Content-Type', contentType);
+      if (contentDisposition) {
+        res.setHeader('Content-Disposition', contentDisposition);
+      }
+      res.setHeader('Content-Length', fileResponse.data.length);
+
+      // Send file data
+      return res.status(200).send(fileResponse.data);
     }
 
     // ===== ROUTE: UPLOAD FILE =====
@@ -141,34 +170,6 @@ export default async function handler(req, res) {
         success: true,
         file: uploadResponse.data,
         message: `File uploaded successfully to user/${fileName}`
-      });
-    }
-
-    // ===== ROUTE: DOWNLOAD FILE =====
-    if (req.method === "DELETE" && req.body.action === "download") {
-      const { fileId, fileName } = req.body;
-      
-      console.log(`📥 Downloading file: ${fileName}`);
-
-      // Get download authorization
-      const downloadAuthResponse = await axios.post(
-        `${authData.apiUrl}/b2api/v2/b2_get_download_authorization`,
-        {
-          bucketId: BUCKET_ID,
-          fileNamePrefix: "user/",
-          validDurationInSeconds: 3600
-        },
-        {
-          headers: {
-            Authorization: authData.authorizationToken,
-          },
-        }
-      );
-
-      return res.status(200).json({
-        success: true,
-        downloadAuth: downloadAuthResponse.data.authorizationToken,
-        downloadUrl: `${authData.downloadUrl}/b2api/v2/b2_download_file_by_id?fileId=${fileId}`
       });
     }
 
