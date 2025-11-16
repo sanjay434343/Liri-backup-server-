@@ -11,6 +11,10 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
+  // Debug logging
+  console.log(`Request: ${req.method} ${req.url}`);
+  console.log('Query params:', req.query);
+
   try {
     // Hardcoded credentials
     const KEY_ID = "0056eab733f02450000000004";
@@ -29,11 +33,53 @@ export default async function handler(req, res) {
     
     const authData = auth.data;
 
-    // ===== ROUTE: LIST FILES =====
-    if (req.method === "GET" && !req.query.fileId) {
-      console.log("📋 Listing files in user/ folder...");
+    // ===== ROUTE: LIST FOLDERS =====
+    if (req.method === "GET" && req.query.action === "folders") {
+      console.log("📁 Listing user folders...");
 
-      // First, get bucket info to retrieve bucket name
+      const listResponse = await axios.post(
+        `${authData.apiUrl}/b2api/v2/b2_list_file_names`,
+        {
+          bucketId: BUCKET_ID,
+          prefix: "user/",
+          delimiter: "/",
+          maxFileCount: 10000
+        },
+        {
+          headers: {
+            Authorization: authData.authorizationToken,
+          },
+        }
+      );
+
+      // Extract unique folder names from file paths
+      const folders = new Set();
+      
+      listResponse.data.files.forEach(file => {
+        const path = file.fileName.replace('user/', '');
+        const folderMatch = path.match(/^([^/]+)\//);
+        if (folderMatch) {
+          folders.add(folderMatch[1]);
+        }
+      });
+
+      const folderList = Array.from(folders).sort();
+      console.log(`✅ Found ${folderList.length} folders:`, folderList);
+
+      return res.status(200).json({
+        success: true,
+        folders: folderList
+      });
+    }
+
+    // ===== ROUTE: LIST FILES (with optional folder filter) =====
+    if (req.method === "GET" && !req.query.fileId && req.query.action !== "folders") {
+      const folder = req.query.folder || '';
+      const prefix = folder ? `user/${folder}/` : 'user/';
+      
+      console.log(`📋 Listing files in: ${prefix}`);
+
+      // Get bucket info
       const bucketInfoResponse = await axios.post(
         `${authData.apiUrl}/b2api/v2/b2_list_buckets`,
         {
@@ -48,14 +94,13 @@ export default async function handler(req, res) {
       );
 
       const bucketName = bucketInfoResponse.data.buckets[0]?.bucketName;
-      console.log(`📦 Bucket name: ${bucketName}`);
 
-      // Now list files
+      // List files
       const listResponse = await axios.post(
         `${authData.apiUrl}/b2api/v2/b2_list_file_names`,
         {
           bucketId: BUCKET_ID,
-          prefix: "user/",
+          prefix: prefix,
           maxFileCount: 1000
         },
         {
@@ -65,22 +110,29 @@ export default async function handler(req, res) {
         }
       );
 
-      const files = listResponse.data.files.map(file => ({
-        fileName: file.fileName,
-        fileId: file.fileId,
-        size: file.contentLength,
-        uploadTimestamp: file.uploadTimestamp,
-        sha1: file.contentSha1,
-        contentType: file.contentType || 'application/octet-stream'
-      }));
+      const files = listResponse.data.files
+        .filter(file => {
+          // Only include files directly in the folder (not in subfolders)
+          const relativePath = file.fileName.replace(prefix, '');
+          return !relativePath.includes('/');
+        })
+        .map(file => ({
+          fileName: file.fileName,
+          fileId: file.fileId,
+          size: file.contentLength,
+          uploadTimestamp: file.uploadTimestamp,
+          sha1: file.contentSha1,
+          contentType: file.contentType || 'application/octet-stream'
+        }));
 
-      console.log(`✅ Found ${files.length} files`);
+      console.log(`✅ Found ${files.length} files in ${prefix}`);
 
       return res.status(200).json({
         success: true,
         files: files,
         count: files.length,
-        bucketName: bucketName
+        bucketName: bucketName,
+        currentFolder: folder
       });
     }
 
@@ -89,47 +141,51 @@ export default async function handler(req, res) {
       const fileId = req.query.fileId;
       console.log(`📥 Proxying download for file: ${fileId}`);
 
-      // Download file from B2
-      const downloadUrl = `${authData.downloadUrl}/b2api/v2/b2_download_file_by_id?fileId=${fileId}`;
-      
-      const fileResponse = await axios.get(downloadUrl, {
-        headers: {
-          Authorization: authData.authorizationToken,
-        },
-        responseType: 'arraybuffer'
-      });
+      try {
+        const downloadUrl = `${authData.downloadUrl}/b2api/v2/b2_download_file_by_id?fileId=${fileId}`;
+        
+        const fileResponse = await axios.get(downloadUrl, {
+          headers: {
+            Authorization: authData.authorizationToken,
+          },
+          responseType: 'arraybuffer'
+        });
 
-      // Get content type from B2 response
-      const contentType = fileResponse.headers['content-type'] || 'application/octet-stream';
-      const contentDisposition = fileResponse.headers['content-disposition'] || '';
-      
-      // Set headers for browser
-      res.setHeader('Content-Type', contentType);
-      if (contentDisposition) {
-        res.setHeader('Content-Disposition', contentDisposition);
+        const contentType = fileResponse.headers['content-type'] || 'application/octet-stream';
+        const contentDisposition = fileResponse.headers['content-disposition'] || '';
+        
+        res.setHeader('Content-Type', contentType);
+        if (contentDisposition) {
+          res.setHeader('Content-Disposition', contentDisposition);
+        }
+        res.setHeader('Content-Length', fileResponse.data.length);
+
+        console.log(`✅ File downloaded successfully, size: ${fileResponse.data.length}`);
+        return res.status(200).send(fileResponse.data);
+      } catch (downloadError) {
+        console.error('Download error:', downloadError.response?.data || downloadError.message);
+        return res.status(500).json({
+          error: 'File download failed',
+          details: downloadError.response?.data || downloadError.message
+        });
       }
-      res.setHeader('Content-Length', fileResponse.data.length);
-
-      // Send file data
-      return res.status(200).send(fileResponse.data);
     }
 
     // ===== ROUTE: UPLOAD FILE =====
     if (req.method === "POST") {
       console.log("🔐 Starting B2 upload process...");
 
-      const { fileName, fileData, sha1 } = req.body;
+      const { fileName, fileData, sha1, folder } = req.body;
       
-      if (!fileName || !fileData || !sha1) {
+      if (!fileName || !fileData || !sha1 || !folder) {
         return res.status(400).json({
-          error: "Missing required fields: fileName, fileData, sha1"
+          error: "Missing required fields: fileName, fileData, sha1, folder"
         });
       }
 
-      console.log(`📁 File: ${fileName}, SHA1: ${sha1}`);
+      console.log(`📁 File: ${fileName}, Folder: ${folder}, SHA1: ${sha1}`);
 
-      // --- GET UPLOAD URL ---
-      console.log("🔗 Getting upload URL...");
+      // Get upload URL
       const upload = await axios.post(
         `${authData.apiUrl}/b2api/v2/b2_get_upload_url`,
         { bucketId: BUCKET_ID },
@@ -140,10 +196,8 @@ export default async function handler(req, res) {
         }
       );
 
-      console.log("✅ Upload URL obtained");
-
-      // --- UPLOAD FILE TO B2 ---
-      const b2FileName = `user/${fileName}`;
+      // Upload file to B2 with folder path
+      const b2FileName = `user/${folder}/${fileName}`;
       console.log(`📤 Uploading to B2 as: ${b2FileName}`);
 
       const fileBuffer = Buffer.from(fileData, 'base64');
@@ -169,7 +223,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         success: true,
         file: uploadResponse.data,
-        message: `File uploaded successfully to user/${fileName}`
+        message: `File uploaded successfully to user/${folder}/${fileName}`
       });
     }
 
